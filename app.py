@@ -18,19 +18,29 @@ if uploaded_file is not None:
         if '_id' in data.columns:
             data['_id'] = data['_id'].apply(lambda x: x['$oid'] if isinstance(x, dict) and '$oid' in x else str(x))
 
-        # --- BƯỚC MỚI: CHUẨN HÓA TÊN CỘT ĐỂ TRÁNH TRÙNG LẶP ---
+        # --- BƯỚC CHUẨN HÓA TÊN CỘT ĐỂ TRÁNH TRÙNG LẶP ---
         def clean_column_name(col):
-            col = str(col).strip() # Xóa khoảng trắng thừa ở đầu/cuối
+            col = str(col).strip()
             if len(col) > 0:
-                # Viết hoa chữ cái đầu tiên, giữ nguyên phần còn lại (để không làm hỏng các chữ như EC, PH)
+                # Viết hoa chữ cái đầu
                 return col[0].upper() + col[1:]
             return col
 
         # Áp dụng đổi tên cột
         data.columns = [clean_column_name(c) for c in data.columns]
 
-        # Gộp các cột trùng tên lại với nhau (lấy giá trị đầu tiên không bị trống)
-        data = data.groupby(data.columns, axis=1).first()
+        # SỬA LỖI GỘP CỘT TẠI ĐÂY (Tương thích với Pandas mới nhất)
+        new_data_dict = {}
+        for col_name in data.columns.unique():
+            col_data = data[col_name]
+            if isinstance(col_data, pd.DataFrame): 
+                # Nếu có từ 2 cột trở lên trùng tên, gộp dữ liệu lại (dồn ô trống)
+                new_data_dict[col_name] = col_data.bfill(axis=1).iloc[:, 0]
+            else:
+                new_data_dict[col_name] = col_data
+        
+        # Tạo lại bảng dữ liệu sau khi đã gộp cột thành công
+        data = pd.DataFrame(new_data_dict)
         # --------------------------------------------------------
 
         # ---------------------------------------------------------
@@ -55,7 +65,7 @@ if uploaded_file is not None:
             selected_column = st.selectbox("1. Chọn cột muốn lọc:", all_columns)
 
         with col2:
-            # Chọn giá trị trong Key đó. Loại bỏ các giá trị NaN (trống) khỏi danh sách chọn
+            # Chọn giá trị trong Key đó (loại bỏ các giá trị trống để danh sách đẹp hơn)
             unique_values = data[selected_column].dropna().unique().tolist()
             selected_values = st.multiselect(
                 f"2. Chọn giá trị trong '{selected_column}':", 

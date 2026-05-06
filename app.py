@@ -18,14 +18,29 @@ if uploaded_file is not None:
         if '_id' in data.columns:
             data['_id'] = data['_id'].apply(lambda x: x['$oid'] if isinstance(x, dict) and '$oid' in x else str(x))
 
+        # --- BƯỚC MỚI: CHUẨN HÓA TÊN CỘT ĐỂ TRÁNH TRÙNG LẶP ---
+        def clean_column_name(col):
+            col = str(col).strip() # Xóa khoảng trắng thừa ở đầu/cuối
+            if len(col) > 0:
+                # Viết hoa chữ cái đầu tiên, giữ nguyên phần còn lại (để không làm hỏng các chữ như EC, PH)
+                return col[0].upper() + col[1:]
+            return col
+
+        # Áp dụng đổi tên cột
+        data.columns = [clean_column_name(c) for c in data.columns]
+
+        # Gộp các cột trùng tên lại với nhau (lấy giá trị đầu tiên không bị trống)
+        data = data.groupby(data.columns, axis=1).first()
+        # --------------------------------------------------------
+
         # ---------------------------------------------------------
         # BƯỚC 1: HIỆN FULL DỮ LIỆU TRƯỚC
         # ---------------------------------------------------------
-        st.subheader("📋 Toàn bộ dữ liệu gốc")
+        st.subheader("📋 Toàn bộ dữ liệu gốc (Đã được chuẩn hóa)")
         st.write(f"Tổng cộng có **{len(data)}** dòng dữ liệu.")
         st.dataframe(data, use_container_width=True)
 
-        st.divider() # Đường kẻ phân cách
+        st.divider()
 
         # ---------------------------------------------------------
         # BƯỚC 2: CHỨC NĂNG LỌC (HIỆN SAU)
@@ -40,12 +55,12 @@ if uploaded_file is not None:
             selected_column = st.selectbox("1. Chọn cột muốn lọc:", all_columns)
 
         with col2:
-            # Chọn giá trị trong Key đó
-            unique_values = data[selected_column].unique().tolist()
+            # Chọn giá trị trong Key đó. Loại bỏ các giá trị NaN (trống) khỏi danh sách chọn
+            unique_values = data[selected_column].dropna().unique().tolist()
             selected_values = st.multiselect(
                 f"2. Chọn giá trị trong '{selected_column}':", 
                 options=unique_values,
-                default=unique_values # Mặc định chọn tất cả
+                default=unique_values 
             )
 
         # Thực hiện lọc dựa trên lựa chọn

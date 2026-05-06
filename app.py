@@ -2,46 +2,65 @@ import streamlit as st
 import pandas as pd
 import io
 
-# Thiết lập tiêu đề cho trang web
-st.title("🔄 Công cụ chuyển đổi JSON sang Excel")
-st.write("Tải file JSON của bạn lên, hệ thống sẽ đọc, lọc dữ liệu và xuất ra file Excel.")
+st.set_page_config(page_title="JSON to Excel Filter Tool", layout="wide")
 
-# Tạo nút upload file
-uploaded_file = st.file_uploader("Chọn file JSON", type=["json"])
+st.title("📊 Tool Lọc Dữ Liệu JSON & Xuất Excel")
+st.write("Tải file JSON lên -> Chọn cột cần lọc -> Chọn giá trị -> Tải file Excel.")
+
+# 1. Upload File
+uploaded_file = st.file_uploader("Tải lên file JSON của bạn", type=["json"])
 
 if uploaded_file is not None:
     try:
-        # 1. Đọc dữ liệu JSON vào Pandas DataFrame
-        df = pd.read_json(uploaded_file)
+        # Đọc dữ liệu
+        data = pd.read_json(uploaded_file)
+
+        # Xử lý trường hợp cột _id là dictionary (đặc trưng của MongoDB)
+        # Chuyển {'$oid': '...'} thành chuỗi văn bản để dễ nhìn và lọc
+        if '_id' in data.columns:
+            data['_id'] = data['_id'].apply(lambda x: x['$oid'] if isinstance(x, dict) and '$oid' in x else str(x))
+
+        st.success("✅ Đã tải dữ liệu thành công!")
         
-        st.subheader("Dữ liệu gốc:")
-        st.dataframe(df)
+        # Giao diện lọc dữ liệu
+        st.subheader("🔍 Bộ lọc dữ liệu")
+        col1, col2 = st.columns(2)
 
-        # 2. LỌC DỮ LIỆU (Tùy chỉnh tại đây)
-        # Ví dụ 1: Chỉ lấy các cột cụ thể
-        # df_filtered = df[['Tên', 'Tuổi', 'Email']]
-        
-        # Ví dụ 2: Lọc các dòng có điều kiện (ví dụ: Tuổi > 18)
-        # df_filtered = df[df['Tuổi'] > 18]
-        
-        # Tạm thời mặc định giữ nguyên toàn bộ dữ liệu:
-        df_filtered = df 
+        with col1:
+            # Cho phép chọn Key (Cột) để lọc
+            all_columns = data.columns.tolist()
+            selected_column = st.selectbox("Chọn cột bạn muốn lọc (Key):", all_columns)
 
-        st.subheader("Dữ liệu sau khi lọc (Sẵn sàng xuất Excel):")
-        st.dataframe(df_filtered)
+        with col2:
+            # Lấy các giá trị duy nhất trong cột đã chọn
+            unique_values = data[selected_column].unique().tolist()
+            selected_values = st.multiselect(
+                f"Chọn giá trị trong '{selected_column}':", 
+                options=unique_values,
+                default=unique_values
+            )
 
-        # 3. Tạo file Excel trong bộ nhớ ảo (không lưu xuống ổ cứng server)
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_filtered.to_excel(writer, index=False, sheet_name='Data')
+        # 2. Thực hiện Lọc
+        filtered_df = data[data[selected_column].isin(selected_values)]
 
-        # 4. Tạo nút tải xuống
-        st.download_button(
-            label="📥 Tải xuống file Excel (.xlsx)",
-            data=buffer.getvalue(),
-            file_name="Du_lieu_da_chuyen_doi.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        # Hiển thị kết quả
+        st.write(f"Tìm thấy **{len(filtered_df)}** dòng thỏa mãn điều kiện.")
+        st.dataframe(filtered_df, use_container_width=True)
+
+        # 3. Xuất file Excel
+        if not filtered_df.empty:
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                filtered_df.to_excel(writer, index=False, sheet_name='FilteredData')
+            
+            st.download_button(
+                label="📥 Tải kết quả lọc về Excel (.xlsx)",
+                data=buffer.getvalue(),
+                file_name=f"loc_{selected_column}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.warning("Không có dữ liệu nào khớp với lựa chọn của bạn.")
 
     except Exception as e:
-        st.error(f"❌ Có lỗi xảy ra khi xử lý file: {e}\nVui lòng kiểm tra lại cấu trúc file JSON của bạn.")
+        st.error(f"Lỗi: {e}")

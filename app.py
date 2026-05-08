@@ -8,7 +8,7 @@ import io
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="JSON Data Pro", layout="wide", page_icon="📊")
-st.title("📊 Công cụ Phân tích Dữ liệu ")
+st.title("📊 Công cụ Phân tích Dữ liệu ( 1 ) ")
 
 # ==============================================================================
 # 1. CÁC HÀM XỬ LÝ LÕI (CÓ CACHE)

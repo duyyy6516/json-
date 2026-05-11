@@ -98,7 +98,6 @@ def render_date_filter(min_date, max_date, key_prefix):
     else:
         start_d = st.date_input("📅 Chọn ngày bắt đầu:", value=min_date, min_value=min_date, max_value=max_date, key=f"start_{key_prefix}")
         if start_d:
-            # Tự động tính ngày kết thúc
             if mode == "Theo Tuần (7 ngày)":
                 end_d = (pd.to_datetime(start_d) + pd.Timedelta(days=6)).date()
             elif mode == "Theo Tháng":
@@ -106,7 +105,6 @@ def render_date_filter(min_date, max_date, key_prefix):
             elif mode == "Theo Quý":
                 end_d = (pd.to_datetime(start_d) + pd.DateOffset(months=3) - pd.Timedelta(days=1)).date()
             
-            # Đảm bảo không vọt quá ngày lớn nhất có trong data
             if end_d > max_date:
                 end_d = max_date
             
@@ -136,10 +134,12 @@ def extract_sensor_data(df, selected_cols):
                 if col_upper in ['NHIỆT ĐỘ'] and v > 100: return v / 10.0
                 return v
                 
+            # Trích xuất dữ liệu chuỗi con (VD: 15-01-01/0.81)
             matches = re.findall(r'(\d{2}-\d{2}-\d{2})/([-+]?\d*\.?\d+)', val)
             if matches:
                 for t_str, v_str in matches:
                     try:
+                        # Ghép giờ:phút:giây vào ngày đang xét
                         full_t_str = f"{main_time.strftime('%Y-%m-%d')} {t_str.replace('-', ':')}"
                         records.append({'TG': pd.to_datetime(full_t_str), 'Giá trị': process_val(v_str), 'Chỉ số': col_upper})
                     except Exception:
@@ -231,12 +231,17 @@ if uploaded_file is not None:
             st.write("⚙️ Thiết lập biểu đồ đơn lẻ")
             col1, col2 = st.columns([1, 2])
             with col1:
-                # --- SỬ DỤNG HÀM LỌC NGÀY MỚI ---
                 start_d_2, end_d_2 = render_date_filter(min_d, max_d, "tab2")
                 
-                res_choice_2 = st.selectbox("Làm mượt:", ["Nguyên bản", "TB mỗi phút", "TB mỗi 5 phút"], key="res_tab2")
-                r_dict = {"Nguyên bản": None, "TB mỗi phút": "1min", "TB mỗi 5 phút": "5min"}
-                filter_data_2 = st.checkbox("✅ Chỉ lấy dữ liệu Sạch (Bỏ nhiễu/lỗi)", value=True, help="Tích vào để lọc bỏ các thông số ảo. Bỏ tích để xem số liệu nguyên gốc.", key="filter_tab2")
+                # NÂNG CẤP LÀM MƯỢT TỰ ĐỘNG
+                res_choice_2 = st.selectbox(
+                    "Làm mượt:", 
+                    ["Tự động", "Nguyên bản", "TB mỗi phút", "TB mỗi 5 phút", "TB mỗi giờ", "TB mỗi ngày"], 
+                    key="res_tab2"
+                )
+                r_dict = {"Tự động": "auto", "Nguyên bản": None, "TB mỗi phút": "1min", "TB mỗi 5 phút": "5min", "TB mỗi giờ": "1h", "TB mỗi ngày": "1D"}
+                
+                filter_data_2 = st.checkbox("✅ Chỉ lấy dữ liệu Sạch (Bỏ nhiễu/lỗi)", value=True, key="filter_tab2")
 
             with col2:
                 st.write("Chọn chỉ số:")
@@ -254,8 +259,17 @@ if uploaded_file is not None:
                     chart_df = extract_sensor_data(filtered_df, selected_keys_2) 
                     
                     if not chart_df.empty:
+                        # LOGIC TỰ ĐỘNG ĐIỀU CHỈNH LÀM MƯỢT
                         rule = r_dict[res_choice_2]
-                        if (end_d_2 - start_d_2).days > 7 and not rule: rule = "5min"
+                        days_diff = (end_d_2 - start_d_2).days
+                        
+                        if rule == "auto":
+                            if days_diff <= 2:
+                                rule = None  # Giữ nguyên bản nếu <= 2 ngày
+                            else:
+                                rule = "1D"  # Trung bình ngày nếu > 2 ngày
+                                st.info("💡 Hệ thống tự động chuyển sang chế độ **Trung bình mỗi ngày** vì khoảng thời gian > 2 ngày để tránh rối biểu đồ.")
+
                         for col in selected_keys_2:
                             sub_df = chart_df[chart_df['Chỉ số'] == col.upper()]
                             ten_chi_so = col.upper()
@@ -266,8 +280,11 @@ if uploaded_file is not None:
                             
                             if sub_df.empty: continue
                             
-                            if rule: plot_data = sub_df.set_index('TG').resample(rule)['Giá trị'].mean().dropna().reset_index()
-                            else: plot_data = sub_df.groupby('TG')['Giá trị'].mean().reset_index()
+                            if rule: 
+                                plot_data = sub_df.set_index('TG').resample(rule)['Giá trị'].mean().dropna().reset_index()
+                            else: 
+                                plot_data = sub_df.groupby('TG')['Giá trị'].mean().reset_index()
+                                
                             plot_data = plot_data.sort_values(by='TG')
                             
                             fig, pts = generate_chart(plot_data, f"Chỉ số: {ten_chi_so}", is_multi=False)
@@ -291,10 +308,13 @@ if uploaded_file is not None:
                 selected_keys_3 = [k for i, k in enumerate(numeric_options) if check_multi_ui[i % 3].checkbox(k.upper(), key=f"c_multi_{k}")]
 
             with col2_m:
-                # --- SỬ DỤNG HÀM LỌC NGÀY MỚI ---
                 start_d_3, end_d_3 = render_date_filter(min_d, max_d, "tab3")
                 
-                res_choice_3 = st.selectbox("Làm mượt:", ["Nguyên bản", "TB mỗi phút", "TB mỗi 5 phút"], key="res_multi")
+                res_choice_3 = st.selectbox(
+                    "Làm mượt:", 
+                    ["Tự động", "Nguyên bản", "TB mỗi phút", "TB mỗi 5 phút", "TB mỗi giờ", "TB mỗi ngày"], 
+                    key="res_multi"
+                )
                 filter_data_3 = st.checkbox("✅ Chỉ lấy dữ liệu Sạch (Bỏ nhiễu/lỗi)", value=True, key="filter_tab3")
 
             if st.button("🚀 TẠO BIỂU ĐỒ ĐỐI CHIẾU", type="primary", key="btn_multi"):
@@ -308,6 +328,17 @@ if uploaded_file is not None:
                     multi_chart_df = extract_sensor_data(filtered_df, selected_keys_3) 
                     
                     if not multi_chart_df.empty:
+                        # LOGIC TỰ ĐỘNG ĐIỀU CHỈNH LÀM MƯỢT CHO TAB 3
+                        rule = r_dict[res_choice_3]
+                        days_diff = (end_d_3 - start_d_3).days
+                        
+                        if rule == "auto":
+                            if days_diff <= 2:
+                                rule = None
+                            else:
+                                rule = "1D"
+                                st.info("💡 Hệ thống tự động chuyển sang chế độ **Trung bình mỗi ngày** vì khoảng thời gian > 2 ngày để tránh rối biểu đồ.")
+
                         clean_dfs = []
                         for col in selected_keys_3:
                             sub_df = multi_chart_df[multi_chart_df['Chỉ số'] == col.upper()]
@@ -322,10 +353,11 @@ if uploaded_file is not None:
                         multi_chart_df = pd.concat(clean_dfs) if clean_dfs else pd.DataFrame()
                         
                         if not multi_chart_df.empty:
-                            rule = r_dict[res_choice_3]
-                            if (end_d_3 - start_d_3).days > 7 and not rule: rule = "5min"
-                            if rule: plot_data = multi_chart_df.set_index('TG').groupby('Chỉ số')['Giá trị'].resample(rule).mean().dropna().reset_index()
-                            else: plot_data = multi_chart_df.groupby(['TG', 'Chỉ số'])['Giá trị'].mean().reset_index()
+                            if rule: 
+                                plot_data = multi_chart_df.set_index('TG').groupby('Chỉ số')['Giá trị'].resample(rule).mean().dropna().reset_index()
+                            else: 
+                                plot_data = multi_chart_df.groupby(['TG', 'Chỉ số'])['Giá trị'].mean().reset_index()
+                                
                             plot_data = plot_data.sort_values(by='TG')
                             
                             fig, pts = generate_chart(plot_data, f"Biểu đồ Đối chiếu Trực tiếp", is_multi=True)

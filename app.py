@@ -12,22 +12,17 @@ import io
 st.set_page_config(page_title="JSON Data Pro", layout="wide", page_icon="🌱")
 st.title("🌱 Công cụ Phân tích Dữ liệu Nông Nghiệp")
 
-# KHOẢNG TỐI ƯU ĐÃ ĐƯỢC ĐƯA VỀ CHUẨN THỰC TẾ (Vì dữ liệu đã được tự động quy đổi)
 KHOANG_TOI_UU = {
     'TEMPKK': (-10.0, 100.0),       
     'HUMIKK': (0.0, 100.0),        
     'SOIL_ASKK': (0.0, 200000.0),   
     'AS': (0.0, 200000.0),          
-    
-    'NHIỆT ĐỘ': (-10.0, 100.0),    # Đã về chuẩn (vd: 33.1 độ)
+    'NHIỆT ĐỘ': (-10.0, 100.0),    
     'ĐỘ ẨM': (0.0, 100.0),          
-    
-    'PH': (0.0, 14.0),             # Đã về chuẩn 0 - 14
+    'PH': (0.0, 14.0),             
     'TBPH': (0.0, 14.0),         
-
     'EC': (0.0, 10000.0),          
     'TBEC': (0.0, 10000.0),        
-    
     'N': (0.0, 2000.0),             
     'P': (0.0, 2000.0),             
     'K': (0.0, 2000.0)               
@@ -83,8 +78,44 @@ def load_and_process_data(file_bytes):
     return df, time_col
 
 # ==============================================================================
-# 2. CÁC HÀM TIỆN ÍCH CHO BIỂU ĐỒ (ĐÃ NÂNG CẤP TỰ ĐỘNG QUY ĐỔI)
+# 2. CÁC HÀM TIỆN ÍCH CHO BIỂU ĐỒ & BỘ LỌC
 # ==============================================================================
+def render_date_filter(min_date, max_date, key_prefix):
+    """Hàm hiển thị giao diện chọn ngày thông minh (Tuần/Tháng/Quý)"""
+    if not min_date: return None, None
+    
+    mode = st.radio(
+        "⏳ Kiểu lọc thời gian:", 
+        ["Tùy chọn", "Theo Tuần (7 ngày)", "Theo Tháng", "Theo Quý"], 
+        horizontal=True, 
+        key=f"mode_{key_prefix}"
+    )
+    
+    if mode == "Tùy chọn":
+        sel_date = st.date_input("📅 Chọn khoảng ngày:", value=(min_date, max_date), min_value=min_date, max_value=max_date, key=f"date_{key_prefix}")
+        start_d = sel_date[0] if sel_date else None
+        end_d = sel_date[1] if sel_date and len(sel_date) == 2 else start_d
+    else:
+        start_d = st.date_input("📅 Chọn ngày bắt đầu:", value=min_date, min_value=min_date, max_value=max_date, key=f"start_{key_prefix}")
+        if start_d:
+            # Tự động tính ngày kết thúc
+            if mode == "Theo Tuần (7 ngày)":
+                end_d = (pd.to_datetime(start_d) + pd.Timedelta(days=6)).date()
+            elif mode == "Theo Tháng":
+                end_d = (pd.to_datetime(start_d) + pd.DateOffset(months=1) - pd.Timedelta(days=1)).date()
+            elif mode == "Theo Quý":
+                end_d = (pd.to_datetime(start_d) + pd.DateOffset(months=3) - pd.Timedelta(days=1)).date()
+            
+            # Đảm bảo không vọt quá ngày lớn nhất có trong data
+            if end_d > max_date:
+                end_d = max_date
+            
+            st.success(f"🎯 Sẽ lọc từ: **{start_d.strftime('%d/%m/%Y')}** đến **{end_d.strftime('%d/%m/%Y')}**")
+        else:
+            end_d = None
+            
+    return start_d, end_d
+
 def extract_sensor_data(df, selected_cols):
     records = []
     cols_to_extract = ['_parsed_time'] + selected_cols
@@ -99,17 +130,11 @@ def extract_sensor_data(df, selected_cols):
                 
             col_upper = col_name.upper()
             
-            # --- LOGIC TỰ ĐỘNG QUY ĐỔI SỐ LIỆU CẢM BIẾN ---
             def process_val(v_str):
                 v = float(v_str)
-                # Nếu pH > 14 (ví dụ 650.0), tự chia 100 để về 6.5
-                if col_upper in ['PH', 'TBPH'] and v > 14:
-                    return v / 100.0
-                # Nếu Nhiệt độ > 100 (ví dụ 331.0), tự chia 10 để về 33.1
-                if col_upper in ['NHIỆT ĐỘ'] and v > 100:
-                    return v / 10.0
+                if col_upper in ['PH', 'TBPH'] and v > 14: return v / 100.0
+                if col_upper in ['NHIỆT ĐỘ'] and v > 100: return v / 10.0
                 return v
-            # ----------------------------------------------
                 
             matches = re.findall(r'(\d{2}-\d{2}-\d{2})/([-+]?\d*\.?\d+)', val)
             if matches:
@@ -132,7 +157,6 @@ def generate_chart(df, title, is_multi=False):
     show_markers = num_points <= 1000 
     
     if is_multi:
-        # Ép sử dụng bảng màu Set1 (Tương phản mạnh: Đỏ, Xanh lam, Xanh lá, Tím, Cam, Vàng, Nâu...)
         fig = px.line(df, x='TG', y='Giá trị', color='Chỉ số', markers=show_markers, render_mode=use_webgl,
                       color_discrete_sequence=px.colors.qualitative.Set1)
     else:
@@ -158,41 +182,22 @@ if uploaded_file is not None:
             file_bytes = uploaded_file.getvalue().decode("utf-8")
             df, time_col = load_and_process_data(file_bytes)
 
-        # ==============================================================================
-        # TÍNH NĂNG LỌC LINH HOẠT THEO KEY BẤT KỲ (TÍCH HỢP Ở THANH BÊN)
-        # ==============================================================================
         st.sidebar.markdown("### 🔍 BỘ LỌC TÙY CHỈNH")
-        
-        # Lấy danh sách tất cả các cột có thể lọc (bỏ qua cột thời gian nội bộ)
         filterable_cols = [col for col in df.columns if col not in ['_parsed_time']]
+        selected_key = st.sidebar.selectbox("1. Chọn trường dữ liệu (Key) muốn lọc:", options=["-- Không lọc --"] + filterable_cols)
         
-        # 1. Người dùng chọn Key (cột) muốn lọc
-        selected_key = st.sidebar.selectbox(
-            "1. Chọn trường dữ liệu (Key) muốn lọc:", 
-            options=["-- Không lọc --"] + filterable_cols
-        )
-        
-        # 2. Nếu đã chọn Key, hiển thị tiếp danh sách các giá trị của Key đó
         if selected_key != "-- Không lọc --":
             unique_values = df[selected_key].dropna().astype(str).unique()
             list_values = ["Tất cả"] + list(unique_values)
+            selected_value = st.sidebar.selectbox(f"2. Chọn giá trị cho '{selected_key.upper()}':", options=list_values)
             
-            selected_value = st.sidebar.selectbox(
-                f"2. Chọn giá trị cho '{selected_key.upper()}':", 
-                options=list_values
-            )
-            
-            # 3. Tiến hành cắt DataFrame
             if selected_value != "Tất cả":
                 df = df[df[selected_key].astype(str) == selected_value].reset_index(drop=True)
                 st.sidebar.success(f"✅ Đang lọc: {selected_key.upper()} = {selected_value}")
-                
                 if df.empty:
                     st.error("⚠️ Bộ lọc này không trả về kết quả nào. Vui lòng chọn giá trị khác!")
                     st.stop()
-        # ==============================================================================
 
-        # Đã bỏ 'mùa vụ' khỏi danh sách exclude
         exclude = [time_col, 'stt', 'tên khu', 'trạng thái', 'phương thức hoạt động', 'người điều khiển', '_parsed_time']
         numeric_options = [c for c in df.columns if c not in exclude and '_id' not in c]
 
@@ -210,17 +215,13 @@ if uploaded_file is not None:
         # ==========================================
         with tab1:
             st.subheader("🌾 Bảng dữ liệu chi tiết")
-            
-            # Ẩn các cột hỗ trợ tính toán nội bộ khi hiển thị cho người dùng
             display_df = df.drop(columns=['_parsed_time'], errors='ignore').fillna("")
-
             col_h1, col_h2 = st.columns([3, 1])
             with col_h1:
                 st.write(f"Đang hiển thị: **{len(df)}** bản ghi (dựa theo bộ lọc hiện tại)")
             with col_h2:
                 csv = display_df.to_csv(index=False).encode('utf-8')
                 st.download_button("📥 Tải xuống CSV", data=csv, file_name='data_export.csv', mime='text/csv', use_container_width=True)
-                
             st.dataframe(display_df, use_container_width=True)
 
         # ==========================================
@@ -230,13 +231,12 @@ if uploaded_file is not None:
             st.write("⚙️ Thiết lập biểu đồ đơn lẻ")
             col1, col2 = st.columns([1, 2])
             with col1:
-                sel_date_2 = st.date_input("Lọc theo ngày:", value=(min_d, max_d), min_value=min_d, max_value=max_d, key="date_tab2") if min_d else None
-                start_d_2 = sel_date_2[0] if sel_date_2 else None
-                end_d_2 = sel_date_2[1] if sel_date_2 and len(sel_date_2) == 2 else start_d_2
+                # --- SỬ DỤNG HÀM LỌC NGÀY MỚI ---
+                start_d_2, end_d_2 = render_date_filter(min_d, max_d, "tab2")
+                
                 res_choice_2 = st.selectbox("Làm mượt:", ["Nguyên bản", "TB mỗi phút", "TB mỗi 5 phút"], key="res_tab2")
                 r_dict = {"Nguyên bản": None, "TB mỗi phút": "1min", "TB mỗi 5 phút": "5min"}
-                
-                filter_data_2 = st.checkbox("✅ Chỉ lấy dữ liệu Sạch (Bỏ nhiễu/lỗi)", value=True, help="Tích vào để lọc bỏ các thông số ảo. Bỏ tích để xem số liệu nguyên gốc.")
+                filter_data_2 = st.checkbox("✅ Chỉ lấy dữ liệu Sạch (Bỏ nhiễu/lỗi)", value=True, help="Tích vào để lọc bỏ các thông số ảo. Bỏ tích để xem số liệu nguyên gốc.", key="filter_tab2")
 
             with col2:
                 st.write("Chọn chỉ số:")
@@ -246,6 +246,8 @@ if uploaded_file is not None:
             if st.button("🚀 TẠO BIỂU ĐỒ ĐƠN", type="primary", key="btn_tab2"):
                 if not selected_keys_2:
                     st.warning("Hãy chọn ít nhất 1 chỉ số!")
+                elif not start_d_2 or not end_d_2:
+                    st.warning("Vui lòng chọn khoảng thời gian hợp lệ!")
                 else:
                     mask = (df['_parsed_time'].dt.date >= start_d_2) & (df['_parsed_time'].dt.date <= end_d_2)
                     filtered_df = df[mask]
@@ -253,7 +255,7 @@ if uploaded_file is not None:
                     
                     if not chart_df.empty:
                         rule = r_dict[res_choice_2]
-                        if start_d_2 and end_d_2 and (end_d_2 - start_d_2).days > 7 and not rule: rule = "5min"
+                        if (end_d_2 - start_d_2).days > 7 and not rule: rule = "5min"
                         for col in selected_keys_2:
                             sub_df = chart_df[chart_df['Chỉ số'] == col.upper()]
                             ten_chi_so = col.upper()
@@ -275,7 +277,7 @@ if uploaded_file is not None:
                             with st.expander(f"📋 Bảng số liệu của biểu đồ trên để đối chứng ({pts} điểm - {trang_thai_loc})"):
                                 st.dataframe(plot_data, use_container_width=True)
                             st.write("---")
-                    else: st.info("Không có dữ liệu hợp lệ.")
+                    else: st.info("Không có dữ liệu hợp lệ trong khoảng thời gian này.")
 
         # ==========================================
         # TAB 3: BIỂU ĐỒ LỒNG NHAU 
@@ -289,16 +291,17 @@ if uploaded_file is not None:
                 selected_keys_3 = [k for i, k in enumerate(numeric_options) if check_multi_ui[i % 3].checkbox(k.upper(), key=f"c_multi_{k}")]
 
             with col2_m:
-                sel_date_3 = st.date_input("Lọc theo ngày:", value=(min_d, max_d), min_value=min_d, max_value=max_d, key="date_multi") if min_d else None
-                start_d_3 = sel_date_3[0] if sel_date_3 else None
-                end_d_3 = sel_date_3[1] if sel_date_3 and len(sel_date_3) == 2 else start_d_3
-                res_choice_3 = st.selectbox("Làm mượt:", ["Nguyên bản", "TB mỗi phút", "TB mỗi 5 phút"], key="res_multi")
+                # --- SỬ DỤNG HÀM LỌC NGÀY MỚI ---
+                start_d_3, end_d_3 = render_date_filter(min_d, max_d, "tab3")
                 
-                filter_data_3 = st.checkbox("✅ Chỉ lấy dữ liệu Sạch (Bỏ nhiễu/lỗi)", value=True, help="Tích vào để lọc bỏ các thông số ảo. Bỏ tích để xem số liệu nguyên gốc.", key="filter_tab3")
+                res_choice_3 = st.selectbox("Làm mượt:", ["Nguyên bản", "TB mỗi phút", "TB mỗi 5 phút"], key="res_multi")
+                filter_data_3 = st.checkbox("✅ Chỉ lấy dữ liệu Sạch (Bỏ nhiễu/lỗi)", value=True, key="filter_tab3")
 
             if st.button("🚀 TẠO BIỂU ĐỒ ĐỐI CHIẾU", type="primary", key="btn_multi"):
                 if len(selected_keys_3) < 2:
                     st.warning("Hãy chọn ít nhất 2 chỉ số!")
+                elif not start_d_3 or not end_d_3:
+                    st.warning("Vui lòng chọn khoảng thời gian hợp lệ!")
                 else:
                     mask = (df['_parsed_time'].dt.date >= start_d_3) & (df['_parsed_time'].dt.date <= end_d_3)
                     filtered_df = df[mask]
@@ -320,7 +323,7 @@ if uploaded_file is not None:
                         
                         if not multi_chart_df.empty:
                             rule = r_dict[res_choice_3]
-                            if start_d_3 and end_d_3 and (end_d_3 - start_d_3).days > 7 and not rule: rule = "5min"
+                            if (end_d_3 - start_d_3).days > 7 and not rule: rule = "5min"
                             if rule: plot_data = multi_chart_df.set_index('TG').groupby('Chỉ số')['Giá trị'].resample(rule).mean().dropna().reset_index()
                             else: plot_data = multi_chart_df.groupby(['TG', 'Chỉ số'])['Giá trị'].mean().reset_index()
                             plot_data = plot_data.sort_values(by='TG')
@@ -332,7 +335,7 @@ if uploaded_file is not None:
                             with st.expander(f"📋 Bảng số liệu gộp của biểu đồ trên để đối chứng ({pts} điểm - {trang_thai_loc_3})"):
                                 pivot_df = plot_data.pivot(index='TG', columns='Chỉ số', values='Giá trị').reset_index()
                                 st.dataframe(pivot_df, use_container_width=True)
-                    else: st.info("Không có dữ liệu hợp lệ.")
+                    else: st.info("Không có dữ liệu hợp lệ trong khoảng thời gian này.")
 
     except Exception as e:
         st.error(f"Đã xảy ra lỗi trong quá trình xử lý: {e}")

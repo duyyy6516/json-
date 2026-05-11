@@ -82,32 +82,6 @@ def load_and_process_data(file_bytes):
         )
     return df, time_col
 
-@st.cache_data
-def detect_seasons(df_input, sensor_cols, gap_days):
-    df = df_input.copy()
-    if '_parsed_time' not in df.columns or df.empty:
-        return df
-        
-    valid_rows_mask = df[sensor_cols].notna().any(axis=1)
-    valid_times = df.loc[valid_rows_mask, '_parsed_time'].sort_values()
-    
-    if valid_times.empty:
-        df['Mùa vụ'] = "Vụ 1"
-        return df
-        
-    time_diffs = valid_times.diff()
-    season_mapping = {}
-    season_num = 1
-    
-    for idx, diff in time_diffs.items():
-        if pd.notna(diff) and diff.days >= gap_days:
-            season_num += 1
-        season_mapping[idx] = f"Vụ {season_num}"
-        
-    df['Mùa vụ'] = pd.Series(season_mapping)
-    df['Mùa vụ'] = df['Mùa vụ'].ffill().bfill()
-    return df
-
 # ==============================================================================
 # 2. CÁC HÀM TIỆN ÍCH CHO BIỂU ĐỒ (ĐÃ NÂNG CẤP TỰ ĐỘNG QUY ĐỔI)
 # ==============================================================================
@@ -218,7 +192,8 @@ if uploaded_file is not None:
                     st.stop()
         # ==============================================================================
 
-        exclude = [time_col, 'stt', 'tên khu', 'trạng thái', 'phương thức hoạt động', 'người điều khiển', '_parsed_time', 'mùa vụ']
+        # Đã bỏ 'mùa vụ' khỏi danh sách exclude
+        exclude = [time_col, 'stt', 'tên khu', 'trạng thái', 'phương thức hoạt động', 'người điều khiển', '_parsed_time']
         numeric_options = [c for c in df.columns if c not in exclude and '_id' not in c]
 
         min_d, max_d = None, None
@@ -228,36 +203,24 @@ if uploaded_file is not None:
                 min_d, max_d = valid_ts.min().date(), valid_ts.max().date()
 
         st.markdown("---")
-        tab1, tab2, tab3 = st.tabs(["🗂️ Bảng dữ liệu gốc", "📈 Biểu đồ Đơn", "📊 Biểu đồ Lồng nhau"])
+        tab1, tab2, tab3 = st.tabs(["🗂️ Bảng dữ liệu", "📈 Biểu đồ Đơn", "📊 Biểu đồ Lồng nhau"])
 
         # ==========================================
         # TAB 1: BẢNG DỮ LIỆU
         # ==========================================
         with tab1:
-            st.subheader("🌾 Lọc và xem dữ liệu theo Mùa Vụ")
-            col_gap1, col_gap2 = st.columns([1, 2])
-            with col_gap1:
-                gap_days = st.number_input("Khoảng trống để tính là vụ mới (Ngày):", min_value=1, value=7)
-                
-            df_with_seasons = detect_seasons(df, numeric_options, gap_days)
-            season_options = ["Tất cả các vụ"] + list(df_with_seasons['Mùa vụ'].unique())
+            st.subheader("🌾 Bảng dữ liệu chi tiết")
             
-            with col_gap2:
-                selected_season = st.selectbox("📌 Chọn mùa vụ để xem bảng & tải CSV:", season_options)
-
-            if selected_season != "Tất cả các vụ":
-                df_tab1 = df_with_seasons[df_with_seasons['Mùa vụ'] == selected_season]
-            else:
-                df_tab1 = df_with_seasons.copy()
-
-            display_df = df_tab1.drop(columns=['_parsed_time'], errors='ignore').fillna("")
+            # Ẩn các cột hỗ trợ tính toán nội bộ khi hiển thị cho người dùng
+            display_df = df.drop(columns=['_parsed_time'], errors='ignore').fillna("")
 
             col_h1, col_h2 = st.columns([3, 1])
             with col_h1:
-                st.write(f"Đang hiển thị: **{selected_season}** ({len(df_tab1)} bản ghi)")
+                st.write(f"Đang hiển thị: **{len(df)}** bản ghi (dựa theo bộ lọc hiện tại)")
             with col_h2:
                 csv = display_df.to_csv(index=False).encode('utf-8')
-                st.download_button("📥 Tải xuống CSV", data=csv, file_name=f'data_{selected_season}.csv', mime='text/csv', use_container_width=True)
+                st.download_button("📥 Tải xuống CSV", data=csv, file_name='data_export.csv', mime='text/csv', use_container_width=True)
+                
             st.dataframe(display_df, use_container_width=True)
 
         # ==========================================

@@ -81,7 +81,6 @@ def load_and_process_data(file_bytes):
 # 2. CÁC HÀM TIỆN ÍCH CHO BIỂU ĐỒ & BỘ LỌC
 # ==============================================================================
 def render_date_filter(min_date, max_date, key_prefix):
-    """Hàm hiển thị giao diện chọn ngày thông minh (Tuần/Tháng/Quý)"""
     if not min_date: return None, None
     
     mode = st.radio(
@@ -115,12 +114,19 @@ def render_date_filter(min_date, max_date, key_prefix):
     return start_d, end_d
 
 def extract_sensor_data(df, selected_cols):
+    """
+    Bóc tách CHÍNH XÁC đến từng giây của mọi khung giờ.
+    Việc gộp (resample) sẽ do Pandas đảm nhiệm ở bước dưới để gom mọi thời điểm của 1 ngày vào làm 1 điểm duy nhất.
+    """
     records = []
     cols_to_extract = ['_parsed_time'] + selected_cols
     working_df = df[cols_to_extract].dropna(subset=['_parsed_time'])
     
     for row in working_df.itertuples(index=False):
         main_time = row[0]
+        # Lấy trước phần ngày (YYYY-MM-DD) để ghép với phần giờ (HH:MM:SS) bên trong chuỗi EC
+        date_str = main_time.strftime('%Y-%m-%d')
+        
         for i, col_name in enumerate(selected_cols, start=1):
             val = str(row[i]).strip()
             if not val or val.lower() == 'nan':
@@ -134,13 +140,12 @@ def extract_sensor_data(df, selected_cols):
                 if col_upper in ['NHIỆT ĐỘ'] and v > 100: return v / 10.0
                 return v
                 
-            # Trích xuất dữ liệu chuỗi con (VD: 15-01-01/0.81)
             matches = re.findall(r'(\d{2}-\d{2}-\d{2})/([-+]?\d*\.?\d+)', val)
             if matches:
+                # Bóc tách mọi thông số của mọi thời điểm
                 for t_str, v_str in matches:
                     try:
-                        # Ghép giờ:phút:giây vào ngày đang xét
-                        full_t_str = f"{main_time.strftime('%Y-%m-%d')} {t_str.replace('-', ':')}"
+                        full_t_str = f"{date_str} {t_str.replace('-', ':')}"
                         records.append({'TG': pd.to_datetime(full_t_str), 'Giá trị': process_val(v_str), 'Chỉ số': col_upper})
                     except Exception:
                         pass
@@ -233,14 +238,12 @@ if uploaded_file is not None:
             with col1:
                 start_d_2, end_d_2 = render_date_filter(min_d, max_d, "tab2")
                 
-                # NÂNG CẤP LÀM MƯỢT TỰ ĐỘNG
                 res_choice_2 = st.selectbox(
                     "Làm mượt:", 
                     ["Tự động", "Nguyên bản", "TB mỗi phút", "TB mỗi 5 phút", "TB mỗi giờ", "TB mỗi ngày"], 
                     key="res_tab2"
                 )
                 r_dict = {"Tự động": "auto", "Nguyên bản": None, "TB mỗi phút": "1min", "TB mỗi 5 phút": "5min", "TB mỗi giờ": "1h", "TB mỗi ngày": "1D"}
-                
                 filter_data_2 = st.checkbox("✅ Chỉ lấy dữ liệu Sạch (Bỏ nhiễu/lỗi)", value=True, key="filter_tab2")
 
             with col2:
@@ -256,19 +259,18 @@ if uploaded_file is not None:
                 else:
                     mask = (df['_parsed_time'].dt.date >= start_d_2) & (df['_parsed_time'].dt.date <= end_d_2)
                     filtered_df = df[mask]
+                    
                     chart_df = extract_sensor_data(filtered_df, selected_keys_2) 
                     
                     if not chart_df.empty:
-                        # LOGIC TỰ ĐỘNG ĐIỀU CHỈNH LÀM MƯỢT
+                        days_diff = (end_d_2 - start_d_2).days if (start_d_2 and end_d_2) else 0
                         rule = r_dict[res_choice_2]
-                        days_diff = (end_d_2 - start_d_2).days
                         
                         if rule == "auto":
-                            if days_diff <= 2:
-                                rule = None  # Giữ nguyên bản nếu <= 2 ngày
-                            else:
-                                rule = "1D"  # Trung bình ngày nếu > 2 ngày
-                                st.info("💡 Hệ thống tự động chuyển sang chế độ **Trung bình mỗi ngày** vì khoảng thời gian > 2 ngày để tránh rối biểu đồ.")
+                            rule = None if days_diff <= 2 else "1D"
+
+                        if rule == "1D":
+                            st.info("💡 Pandas đang tự động quét TẤT CẢ các điểm của MỌI khung giờ trong cùng 1 ngày, gộp chung lại thành đúng 1 điểm trung bình mỗi ngày.")
 
                         for col in selected_keys_2:
                             sub_df = chart_df[chart_df['Chỉ số'] == col.upper()]
@@ -280,6 +282,7 @@ if uploaded_file is not None:
                             
                             if sub_df.empty: continue
                             
+                            # TRÁI TIM CỦA VIỆC GỘP LÀ ĐÂY:
                             if rule: 
                                 plot_data = sub_df.set_index('TG').resample(rule)['Giá trị'].mean().dropna().reset_index()
                             else: 
@@ -325,19 +328,18 @@ if uploaded_file is not None:
                 else:
                     mask = (df['_parsed_time'].dt.date >= start_d_3) & (df['_parsed_time'].dt.date <= end_d_3)
                     filtered_df = df[mask]
+                    
                     multi_chart_df = extract_sensor_data(filtered_df, selected_keys_3) 
                     
                     if not multi_chart_df.empty:
-                        # LOGIC TỰ ĐỘNG ĐIỀU CHỈNH LÀM MƯỢT CHO TAB 3
+                        days_diff = (end_d_3 - start_d_3).days if (start_d_3 and end_d_3) else 0
                         rule = r_dict[res_choice_3]
-                        days_diff = (end_d_3 - start_d_3).days
                         
                         if rule == "auto":
-                            if days_diff <= 2:
-                                rule = None
-                            else:
-                                rule = "1D"
-                                st.info("💡 Hệ thống tự động chuyển sang chế độ **Trung bình mỗi ngày** vì khoảng thời gian > 2 ngày để tránh rối biểu đồ.")
+                            rule = None if days_diff <= 2 else "1D"
+
+                        if rule == "1D":
+                            st.info("💡 Pandas đang tự động quét TẤT CẢ các điểm của MỌI khung giờ trong cùng 1 ngày, gộp chung lại thành đúng 1 điểm trung bình mỗi ngày.")
 
                         clean_dfs = []
                         for col in selected_keys_3:

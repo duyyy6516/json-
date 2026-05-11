@@ -6,12 +6,35 @@ import re
 import plotly.express as px
 import io
 
-# --- CẤU HÌNH TRANG ---
-st.set_page_config(page_title="JSON Data Pro", layout="wide", page_icon="📊")
-st.title("📊 Công cụ Phân tích Dữ liệu ( 1 ) ")
+# ==============================================================================
+# --- CẤU HÌNH TRANG & THÔNG SỐ TỐI ƯU ---
+# ==============================================================================
+st.set_page_config(page_title="JSON Data Pro", layout="wide", page_icon="🌱")
+st.title("🌱 Công cụ Phân tích Dữ liệu Nông Nghiệp")
+
+# KHOẢNG TỐI ƯU ĐÃ ĐƯỢC ĐƯA VỀ CHUẨN THỰC TẾ (Vì dữ liệu đã được tự động quy đổi)
+KHOANG_TOI_UU = {
+    'TEMPKK': (-10.0, 100.0),       
+    'HUMIKK': (0.0, 100.0),        
+    'SOIL_ASKK': (0.0, 200000.0),   
+    'AS': (0.0, 200000.0),          
+    
+    'NHIỆT ĐỘ': (-10.0, 100.0),    # Đã về chuẩn (vd: 33.1 độ)
+    'ĐỘ ẨM': (0.0, 100.0),          
+    
+    'PH': (0.0, 14.0),             # Đã về chuẩn 0 - 14
+    'TBPH': (0.0, 14.0),         
+
+    'EC': (0.0, 10000.0),          
+    'TBEC': (0.0, 10000.0),        
+    
+    'N': (0.0, 2000.0),             
+    'P': (0.0, 2000.0),             
+    'K': (0.0, 2000.0)               
+}
 
 # ==============================================================================
-# 1. CÁC HÀM XỬ LÝ LÕI (CÓ CACHE)
+# 1. CÁC HÀM XỬ LÝ LÕI
 # ==============================================================================
 @st.cache_data
 def normalize_keys(data):
@@ -38,7 +61,6 @@ def flatten_json(y):
 
 @st.cache_data
 def load_and_process_data(file_bytes):
-    # Tách riêng bẫy lỗi JSON để dễ debug
     try:
         raw_data = json.loads(file_bytes)
     except json.JSONDecodeError:
@@ -52,90 +74,104 @@ def load_and_process_data(file_bytes):
     df = df.dropna(axis=1, how='all').loc[:, ~df.columns.duplicated()]
     df = df.replace(r'^\s*$', np.nan, regex=True)
     
-    # Chuẩn hóa thời gian chỉ 1 lần duy nhất
     time_col = next((col for col in df.columns if 'time' in col.lower() or 'thời gian' in col.lower()), None)
     if time_col:
-        # Thay thế chuỗi chuyên biệt để ép kiểu Datetime
         df['_parsed_time'] = pd.to_datetime(
             df[time_col].astype(str).str.replace('-', ':').str.replace(':', '-', 2), 
             errors='coerce'
         )
     return df, time_col
 
+@st.cache_data
+def detect_seasons(df_input, sensor_cols, gap_days):
+    df = df_input.copy()
+    if '_parsed_time' not in df.columns or df.empty:
+        return df
+        
+    valid_rows_mask = df[sensor_cols].notna().any(axis=1)
+    valid_times = df.loc[valid_rows_mask, '_parsed_time'].sort_values()
+    
+    if valid_times.empty:
+        df['Mùa vụ'] = "Vụ 1"
+        return df
+        
+    time_diffs = valid_times.diff()
+    season_mapping = {}
+    season_num = 1
+    
+    for idx, diff in time_diffs.items():
+        if pd.notna(diff) and diff.days >= gap_days:
+            season_num += 1
+        season_mapping[idx] = f"Vụ {season_num}"
+        
+    df['Mùa vụ'] = pd.Series(season_mapping)
+    df['Mùa vụ'] = df['Mùa vụ'].ffill().bfill()
+    return df
+
 # ==============================================================================
-# 2. CÁC HÀM TIỆN ÍCH CHO BIỂU ĐỒ (DRY - DON'T REPEAT YOURSELF)
+# 2. CÁC HÀM TIỆN ÍCH CHO BIỂU ĐỒ (ĐÃ NÂNG CẤP TỰ ĐỘNG QUY ĐỔI)
 # ==============================================================================
 def extract_sensor_data(df, selected_cols):
-    """Sử dụng itertuples thay iterrows để bóc tách dữ liệu cực nhanh"""
     records = []
-    
-    # Lấy các cột cần thiết (bao gồm thời gian đã chuẩn hóa)
     cols_to_extract = ['_parsed_time'] + selected_cols
     working_df = df[cols_to_extract].dropna(subset=['_parsed_time'])
     
     for row in working_df.itertuples(index=False):
-        main_time = row[0] # Cột _parsed_time
-        
+        main_time = row[0]
         for i, col_name in enumerate(selected_cols, start=1):
             val = str(row[i]).strip()
             if not val or val.lower() == 'nan':
                 continue
                 
+            col_upper = col_name.upper()
+            
+            # --- LOGIC TỰ ĐỘNG QUY ĐỔI SỐ LIỆU CẢM BIẾN ---
+            def process_val(v_str):
+                v = float(v_str)
+                # Nếu pH > 14 (ví dụ 650.0), tự chia 100 để về 6.5
+                if col_upper in ['PH', 'TBPH'] and v > 14:
+                    return v / 100.0
+                # Nếu Nhiệt độ > 100 (ví dụ 331.0), tự chia 10 để về 33.1
+                if col_upper in ['NHIỆT ĐỘ'] and v > 100:
+                    return v / 10.0
+                return v
+            # ----------------------------------------------
+                
             matches = re.findall(r'(\d{2}-\d{2}-\d{2})/([-+]?\d*\.?\d+)', val)
             if matches:
                 for t_str, v_str in matches:
                     try:
-                        # Ghép ngày của main_time với giờ phút giây của value
                         full_t_str = f"{main_time.strftime('%Y-%m-%d')} {t_str.replace('-', ':')}"
-                        records.append({
-                            'TG': pd.to_datetime(full_t_str), 
-                            'Giá trị': float(v_str), 
-                            'Chỉ số': col_name.upper()
-                        })
+                        records.append({'TG': pd.to_datetime(full_t_str), 'Giá trị': process_val(v_str), 'Chỉ số': col_upper})
                     except Exception:
                         pass
             else:
                 num_match = re.search(r'[-+]?\d*\.?\d+', val)
                 if num_match:
-                    records.append({
-                        'TG': main_time, 
-                        'Giá trị': float(num_match.group()), 
-                        'Chỉ số': col_name.upper()
-                    })
+                    records.append({'TG': main_time, 'Giá trị': process_val(num_match.group()), 'Chỉ số': col_upper})
                     
     return pd.DataFrame(records)
 
 def generate_chart(df, title, is_multi=False):
-    """Hàm vẽ biểu đồ chung giúp tránh lặp lại cấu hình Plotly"""
     num_points = len(df)
     use_webgl = 'webgl' if num_points > 1000 else 'svg'
     show_markers = num_points <= 1000 
     
     if is_multi:
-        fig = px.line(df, x='TG', y='Giá trị', color='Chỉ số', markers=show_markers, render_mode=use_webgl)
+        # Ép sử dụng bảng màu Set1 (Tương phản mạnh: Đỏ, Xanh lam, Xanh lá, Tím, Cam, Vàng, Nâu...)
+        fig = px.line(df, x='TG', y='Giá trị', color='Chỉ số', markers=show_markers, render_mode=use_webgl,
+                      color_discrete_sequence=px.colors.qualitative.Set1)
     else:
         fig = px.line(df, x='TG', y='Giá trị', markers=show_markers, render_mode=use_webgl)
         
     fig.update_layout(
-        title=f"<b>{title}</b>",
-        xaxis_title="Thời gian (TG)",
-        yaxis_title="Giá trị",
-        hovermode="x unified",
-        dragmode='pan',
+        title=f"<b>{title}</b>", xaxis_title="Thời gian", yaxis_title="Giá trị",
+        hovermode="x unified", dragmode='pan',
         xaxis=dict(rangeslider=dict(visible=False), type="date")
     )
-    
     fig.update_xaxes(showspikes=True, spikecolor="gray", spikesnap="cursor", spikemode="across")
     fig.update_yaxes(showspikes=True, spikecolor="gray", spikemode="across")
-    
     return fig, num_points
-
-def to_excel(df):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='Data')
-    processed_data = output.getvalue()
-    return processed_data
 
 # ==============================================================================
 # 3. XỬ LÝ GIAO DIỆN & FILE UPLOAD
@@ -144,171 +180,196 @@ uploaded_file = st.file_uploader("Tải lên file JSON", type=['json'])
 
 if uploaded_file is not None:
     try:
-        # Load dữ liệu
         with st.spinner("Đang xử lý dữ liệu..."):
             file_bytes = uploaded_file.getvalue().decode("utf-8")
             df, time_col = load_and_process_data(file_bytes)
-            display_df = df.drop(columns=['_parsed_time'], errors='ignore').fillna("")
 
-        # Lấy dải ngày hợp lệ để cấu hình bộ lọc
+        # ==============================================================================
+        # TÍNH NĂNG LỌC LINH HOẠT THEO KEY BẤT KỲ (TÍCH HỢP Ở THANH BÊN)
+        # ==============================================================================
+        st.sidebar.markdown("### 🔍 BỘ LỌC TÙY CHỈNH")
+        
+        # Lấy danh sách tất cả các cột có thể lọc (bỏ qua cột thời gian nội bộ)
+        filterable_cols = [col for col in df.columns if col not in ['_parsed_time']]
+        
+        # 1. Người dùng chọn Key (cột) muốn lọc
+        selected_key = st.sidebar.selectbox(
+            "1. Chọn trường dữ liệu (Key) muốn lọc:", 
+            options=["-- Không lọc --"] + filterable_cols
+        )
+        
+        # 2. Nếu đã chọn Key, hiển thị tiếp danh sách các giá trị của Key đó
+        if selected_key != "-- Không lọc --":
+            unique_values = df[selected_key].dropna().astype(str).unique()
+            list_values = ["Tất cả"] + list(unique_values)
+            
+            selected_value = st.sidebar.selectbox(
+                f"2. Chọn giá trị cho '{selected_key.upper()}':", 
+                options=list_values
+            )
+            
+            # 3. Tiến hành cắt DataFrame
+            if selected_value != "Tất cả":
+                df = df[df[selected_key].astype(str) == selected_value].reset_index(drop=True)
+                st.sidebar.success(f"✅ Đang lọc: {selected_key.upper()} = {selected_value}")
+                
+                if df.empty:
+                    st.error("⚠️ Bộ lọc này không trả về kết quả nào. Vui lòng chọn giá trị khác!")
+                    st.stop()
+        # ==============================================================================
+
+        exclude = [time_col, 'stt', 'tên khu', 'trạng thái', 'phương thức hoạt động', 'người điều khiển', '_parsed_time', 'mùa vụ']
+        numeric_options = [c for c in df.columns if c not in exclude and '_id' not in c]
+
         min_d, max_d = None, None
         if '_parsed_time' in df.columns:
             valid_ts = df['_parsed_time'].dropna()
             if not valid_ts.empty:
                 min_d, max_d = valid_ts.min().date(), valid_ts.max().date()
 
-        # Tạo danh sách cột chỉ số chung
-        exclude = [time_col, 'stt', 'tên khu', 'trạng thái', 'phương thức hoạt động', 'người điều khiển', '_parsed_time']
-        numeric_options = [c for c in df.columns if c not in exclude and '_id' not in c]
+        st.markdown("---")
+        tab1, tab2, tab3 = st.tabs(["🗂️ Bảng dữ liệu gốc", "📈 Biểu đồ Đơn", "📊 Biểu đồ Lồng nhau"])
 
-        # --- TẠO 3 TABS ---
-        tab1, tab2, tab3 = st.tabs(["🗂️ Bảng dữ liệu gốc", "📈 Biểu đồ Đơn", "📊 Biểu đồ Lồng nhau (So sánh)"])
-
-        # -------------------------------------------------------------
-        # TAB 1: BẢNG DỮ LIỆU & TẢI XUỐNG
-        # -------------------------------------------------------------
+        # ==========================================
+        # TAB 1: BẢNG DỮ LIỆU
+        # ==========================================
         with tab1:
-            col_head1, col_head2 = st.columns([3, 1])
-            with col_head1:
-                st.subheader(f"Bảng dữ liệu gốc ({len(df)} bản ghi)")
-            with col_head2:
-                csv = display_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 Tải xuống CSV",
-                    data=csv,
-                    file_name='data_export.csv',
-                    mime='text/csv',
-                    use_container_width=True
-                )
+            st.subheader("🌾 Lọc và xem dữ liệu theo Mùa Vụ")
+            col_gap1, col_gap2 = st.columns([1, 2])
+            with col_gap1:
+                gap_days = st.number_input("Khoảng trống để tính là vụ mới (Ngày):", min_value=1, value=7)
+                
+            df_with_seasons = detect_seasons(df, numeric_options, gap_days)
+            season_options = ["Tất cả các vụ"] + list(df_with_seasons['Mùa vụ'].unique())
             
+            with col_gap2:
+                selected_season = st.selectbox("📌 Chọn mùa vụ để xem bảng & tải CSV:", season_options)
+
+            if selected_season != "Tất cả các vụ":
+                df_tab1 = df_with_seasons[df_with_seasons['Mùa vụ'] == selected_season]
+            else:
+                df_tab1 = df_with_seasons.copy()
+
+            display_df = df_tab1.drop(columns=['_parsed_time'], errors='ignore').fillna("")
+
+            col_h1, col_h2 = st.columns([3, 1])
+            with col_h1:
+                st.write(f"Đang hiển thị: **{selected_season}** ({len(df_tab1)} bản ghi)")
+            with col_h2:
+                csv = display_df.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Tải xuống CSV", data=csv, file_name=f'data_{selected_season}.csv', mime='text/csv', use_container_width=True)
             st.dataframe(display_df, use_container_width=True)
 
-        # -------------------------------------------------------------
+        # ==========================================
         # TAB 2: BIỂU ĐỒ ĐƠN LẺ
-        # -------------------------------------------------------------
+        # ==========================================
         with tab2:
-            st.subheader("⚙️ Thiết lập biểu đồ đơn lẻ")
-            
+            st.write("⚙️ Thiết lập biểu đồ đơn lẻ")
             col1, col2 = st.columns([1, 2])
             with col1:
                 sel_date_2 = st.date_input("Lọc theo ngày:", value=(min_d, max_d), min_value=min_d, max_value=max_d, key="date_tab2") if min_d else None
                 start_d_2 = sel_date_2[0] if sel_date_2 else None
                 end_d_2 = sel_date_2[1] if sel_date_2 and len(sel_date_2) == 2 else start_d_2
+                res_choice_2 = st.selectbox("Làm mượt:", ["Nguyên bản", "TB mỗi phút", "TB mỗi 5 phút"], key="res_tab2")
+                r_dict = {"Nguyên bản": None, "TB mỗi phút": "1min", "TB mỗi 5 phút": "5min"}
                 
-                res_choice_2 = st.selectbox(
-                    "Làm mượt dữ liệu:", 
-                    ["Nguyên bản", "Trung bình mỗi phút", "Trung bình mỗi 5 phút"], 
-                    key="res_tab2"
-                )
-                r_dict = {"Nguyên bản": None, "Trung bình mỗi phút": "1min", "Trung bình mỗi 5 phút": "5min"}
+                filter_data_2 = st.checkbox("✅ Chỉ lấy dữ liệu Sạch (Bỏ nhiễu/lỗi)", value=True, help="Tích vào để lọc bỏ các thông số ảo. Bỏ tích để xem số liệu nguyên gốc.")
 
             with col2:
-                st.write("Chọn chỉ số vẽ biểu đồ:")
+                st.write("Chọn chỉ số:")
                 cols_ui = st.columns(4)
                 selected_keys_2 = [k for i, k in enumerate(numeric_options) if cols_ui[i % 4].checkbox(k.upper(), key=f"c_tab2_{k}")]
 
             if st.button("🚀 TẠO BIỂU ĐỒ ĐƠN", type="primary", key="btn_tab2"):
                 if not selected_keys_2:
                     st.warning("Hãy chọn ít nhất 1 chỉ số!")
-                elif not time_col:
-                    st.error("Dữ liệu không có cột thời gian hợp lệ.")
                 else:
-                    # Lọc dữ liệu theo ngày
                     mask = (df['_parsed_time'].dt.date >= start_d_2) & (df['_parsed_time'].dt.date <= end_d_2)
                     filtered_df = df[mask]
-                    
-                    chart_df = extract_sensor_data(filtered_df, selected_keys_2)
+                    chart_df = extract_sensor_data(filtered_df, selected_keys_2) 
                     
                     if not chart_df.empty:
                         rule = r_dict[res_choice_2]
-                        # Tự động điều chỉnh rule nếu số ngày quá dài
-                        if start_d_2 and end_d_2:
-                            delta_days = (end_d_2 - start_d_2).days
-                            if delta_days > 7 and not rule:
-                                st.warning(f"⚠️ Khoảng thời gian quá dài ({delta_days} ngày). Hệ thống tự động mượt hóa '5 phút/lần' để tránh treo.")
-                                rule = "5min"
-
+                        if start_d_2 and end_d_2 and (end_d_2 - start_d_2).days > 7 and not rule: rule = "5min"
                         for col in selected_keys_2:
                             sub_df = chart_df[chart_df['Chỉ số'] == col.upper()]
+                            ten_chi_so = col.upper()
+                            
+                            if filter_data_2 and ten_chi_so in KHOANG_TOI_UU:
+                                min_val, max_val = KHOANG_TOI_UU[ten_chi_so]
+                                sub_df = sub_df[(sub_df['Giá trị'] >= min_val) & (sub_df['Giá trị'] <= max_val)]
+                            
                             if sub_df.empty: continue
                             
-                            if rule:
-                                plot_data = sub_df.set_index('TG').resample(rule)['Giá trị'].mean().dropna().reset_index()
-                            else:
-                                plot_data = sub_df.groupby('TG')['Giá trị'].mean().reset_index()
-                                
+                            if rule: plot_data = sub_df.set_index('TG').resample(rule)['Giá trị'].mean().dropna().reset_index()
+                            else: plot_data = sub_df.groupby('TG')['Giá trị'].mean().reset_index()
                             plot_data = plot_data.sort_values(by='TG')
                             
-                            fig, pts = generate_chart(plot_data, f"Chỉ số: {col.upper()}", is_multi=False)
+                            fig, pts = generate_chart(plot_data, f"Chỉ số: {ten_chi_so}", is_multi=False)
                             st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
                             
-                            with st.expander(f"Xem chi tiết {pts} điểm dữ liệu"):
+                            trang_thai_loc = "Đã lọc sạch" if filter_data_2 else "Chưa lọc - Gốc 100%"
+                            with st.expander(f"📋 Bảng số liệu của biểu đồ trên để đối chứng ({pts} điểm - {trang_thai_loc})"):
                                 st.dataframe(plot_data, use_container_width=True)
                             st.write("---")
-                    else:
-                        st.info("Không có dữ liệu hợp lệ trong khoảng thời gian đã chọn.")
+                    else: st.info("Không có dữ liệu hợp lệ.")
 
-        # -------------------------------------------------------------
-        # TAB 3: BIỂU ĐỒ ĐỐI CHIẾU
-        # -------------------------------------------------------------
+        # ==========================================
+        # TAB 3: BIỂU ĐỒ LỒNG NHAU 
+        # ==========================================
         with tab3:
-            st.subheader("⚙️ Thiết lập biểu đồ đối chiếu lồng nhau")
-            st.info("So sánh trực tiếp các giá trị cảm biến trên cùng một trục thời gian.")
-            
+            st.write("⚙️ Thiết lập biểu đồ lồng nhau")
             col1_m, col2_m = st.columns([1, 2])
             with col1_m:
-                st.write("🎯 **1. Chọn các chỉ số:**")
+                st.write("🎯 **Chọn chỉ số:**")
                 check_multi_ui = st.columns(3)
                 selected_keys_3 = [k for i, k in enumerate(numeric_options) if check_multi_ui[i % 3].checkbox(k.upper(), key=f"c_multi_{k}")]
 
             with col2_m:
-                st.write("✨ **2. Tùy chỉnh:**")
                 sel_date_3 = st.date_input("Lọc theo ngày:", value=(min_d, max_d), min_value=min_d, max_value=max_d, key="date_multi") if min_d else None
                 start_d_3 = sel_date_3[0] if sel_date_3 else None
                 end_d_3 = sel_date_3[1] if sel_date_3 and len(sel_date_3) == 2 else start_d_3
+                res_choice_3 = st.selectbox("Làm mượt:", ["Nguyên bản", "TB mỗi phút", "TB mỗi 5 phút"], key="res_multi")
                 
-                res_choice_3 = st.selectbox(
-                    "Làm mượt dữ liệu:", 
-                    ["Nguyên bản", "Trung bình mỗi phút", "Trung bình mỗi 5 phút"], 
-                    key="res_multi"
-                )
+                filter_data_3 = st.checkbox("✅ Chỉ lấy dữ liệu Sạch (Bỏ nhiễu/lỗi)", value=True, help="Tích vào để lọc bỏ các thông số ảo. Bỏ tích để xem số liệu nguyên gốc.", key="filter_tab3")
 
             if st.button("🚀 TẠO BIỂU ĐỒ ĐỐI CHIẾU", type="primary", key="btn_multi"):
                 if len(selected_keys_3) < 2:
-                    st.warning("Hãy chọn ít nhất 2 chỉ số để so sánh!")
-                elif not time_col:
-                    st.error("Dữ liệu không có cột thời gian hợp lệ.")
+                    st.warning("Hãy chọn ít nhất 2 chỉ số!")
                 else:
                     mask = (df['_parsed_time'].dt.date >= start_d_3) & (df['_parsed_time'].dt.date <= end_d_3)
                     filtered_df = df[mask]
-                    
-                    multi_chart_df = extract_sensor_data(filtered_df, selected_keys_3)
+                    multi_chart_df = extract_sensor_data(filtered_df, selected_keys_3) 
                     
                     if not multi_chart_df.empty:
-                        rule = r_dict[res_choice_3]
-                        if start_d_3 and end_d_3:
-                            delta_days = (end_d_3 - start_d_3).days
-                            if delta_days > 7 and not rule:
-                                st.warning(f"⚠️ Khoảng thời gian quá dài ({delta_days} ngày). Tự động mượt hóa '5 phút/lần'.")
-                                rule = "5min"
-                                
-                        if rule:
-                            plot_data = multi_chart_df.set_index('TG').groupby('Chỉ số')['Giá trị'].resample(rule).mean().dropna().reset_index()
-                        else:
-                            plot_data = multi_chart_df.groupby(['TG', 'Chỉ số'])['Giá trị'].mean().reset_index()
+                        clean_dfs = []
+                        for col in selected_keys_3:
+                            sub_df = multi_chart_df[multi_chart_df['Chỉ số'] == col.upper()]
+                            ten_chi_so = col.upper()
                             
-                        plot_data = plot_data.sort_values(by='TG')
+                            if filter_data_3 and ten_chi_so in KHOANG_TOI_UU:
+                                min_val, max_val = KHOANG_TOI_UU[ten_chi_so]
+                                sub_df = sub_df[(sub_df['Giá trị'] >= min_val) & (sub_df['Giá trị'] <= max_val)]
+                                
+                            if not sub_df.empty: clean_dfs.append(sub_df)
+                            
+                        multi_chart_df = pd.concat(clean_dfs) if clean_dfs else pd.DataFrame()
                         
-                        fig, pts = generate_chart(plot_data, "Biểu đồ Đối chiếu Trực tiếp", is_multi=True)
-                        st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
-                        
-                        with st.expander(f"Xem bảng dữ liệu gộp ({pts} điểm)"):
-                            pivot_df = plot_data.pivot(index='TG', columns='Chỉ số', values='Giá trị').reset_index()
-                            st.dataframe(pivot_df, use_container_width=True)
-                    else:
-                        st.info("Không có dữ liệu hợp lệ trong khoảng thời gian đã chọn.")
+                        if not multi_chart_df.empty:
+                            rule = r_dict[res_choice_3]
+                            if start_d_3 and end_d_3 and (end_d_3 - start_d_3).days > 7 and not rule: rule = "5min"
+                            if rule: plot_data = multi_chart_df.set_index('TG').groupby('Chỉ số')['Giá trị'].resample(rule).mean().dropna().reset_index()
+                            else: plot_data = multi_chart_df.groupby(['TG', 'Chỉ số'])['Giá trị'].mean().reset_index()
+                            plot_data = plot_data.sort_values(by='TG')
+                            
+                            fig, pts = generate_chart(plot_data, f"Biểu đồ Đối chiếu Trực tiếp", is_multi=True)
+                            st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+                            
+                            trang_thai_loc_3 = "Đã lọc sạch" if filter_data_3 else "Chưa lọc - Gốc 100%"
+                            with st.expander(f"📋 Bảng số liệu gộp của biểu đồ trên để đối chứng ({pts} điểm - {trang_thai_loc_3})"):
+                                pivot_df = plot_data.pivot(index='TG', columns='Chỉ số', values='Giá trị').reset_index()
+                                st.dataframe(pivot_df, use_container_width=True)
+                    else: st.info("Không có dữ liệu hợp lệ.")
 
-    except ValueError as ve:
-        st.error(f"❌ {ve}")
     except Exception as e:
-        st.error(f"Đã xảy ra lỗi không xác định: {e}. Vui lòng kiểm tra lại cấu trúc file JSON.")
+        st.error(f"Đã xảy ra lỗi trong quá trình xử lý: {e}")

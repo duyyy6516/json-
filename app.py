@@ -115,10 +115,10 @@ def render_date_filter(min_date, max_date, key_prefix):
 
 def extract_sensor_data(df, selected_cols):
     """
-    Bóc tách CHÍNH XÁC đến từng giây của mọi khung giờ.
-    Việc gộp (resample) sẽ do Pandas đảm nhiệm ở bước vẽ biểu đồ.
+    Bóc tách dữ liệu và đồng thời phát hiện cột nào chứa chuỗi dữ liệu đa thời điểm (High-Frequency).
     """
     records = []
+    high_freq_cols = set() # Lưu lại các cột cần bị ép trung bình ngày
     cols_to_extract = ['_parsed_time'] + selected_cols
     working_df = df[cols_to_extract].dropna(subset=['_parsed_time'])
     
@@ -139,8 +139,10 @@ def extract_sensor_data(df, selected_cols):
                 if col_upper in ['NHIỆT ĐỘ'] and v > 100: return v / 10.0
                 return v
                 
+            # Kiểm tra xem có phải định dạng chuỗi nhiều mốc thời gian không
             matches = re.findall(r'(\d{2}-\d{2}-\d{2})/([-+]?\d*\.?\d+)', val)
             if matches:
+                high_freq_cols.add(col_upper) # Đánh dấu đây là cột dữ liệu dày đặc
                 for t_str, v_str in matches:
                     try:
                         full_t_str = f"{date_str} {t_str.replace('-', ':')}"
@@ -152,7 +154,7 @@ def extract_sensor_data(df, selected_cols):
                 if num_match:
                     records.append({'TG': main_time, 'Giá trị': process_val(num_match.group()), 'Chỉ số': col_upper})
                     
-    return pd.DataFrame(records)
+    return pd.DataFrame(records), high_freq_cols
 
 def generate_chart(df, title, is_multi=False):
     num_points = len(df)
@@ -251,15 +253,16 @@ if uploaded_file is not None:
                     mask = (df['_parsed_time'].dt.date >= start_d_2) & (df['_parsed_time'].dt.date <= end_d_2)
                     filtered_df = df[mask]
                     
-                    chart_df = extract_sensor_data(filtered_df, selected_keys_2) 
+                    # Lấy DataFrame và danh sách các cột là dữ liệu tần suất cao
+                    chart_df, high_freq_cols = extract_sensor_data(filtered_df, selected_keys_2) 
                     
                     if not chart_df.empty:
-                        # LOGIC ÉP BUỘC LÀM MƯỢT TRUNG BÌNH THEO NGÀY NẾU > 2 NGÀY
                         days_diff = (end_d_2 - start_d_2).days if (start_d_2 and end_d_2) else 0
-                        rule = "1D" if days_diff > 2 else None
 
-                        if rule == "1D":
-                            st.info("💡 Do khoảng thời gian bạn chọn > 2 ngày, hệ thống đã ngầm tự động gộp và tính trung bình các số liệu theo từng ngày để biểu đồ trực quan, dễ nhìn hơn.")
+                        # Lọc ra các cột vừa được chọn VÀ nằm trong nhóm bị ép trung bình
+                        averaged_cols = [c.upper() for c in selected_keys_2 if c.upper() in high_freq_cols]
+                        if days_diff > 2 and averaged_cols:
+                            st.info(f"💡 Chỉ số ({', '.join(averaged_cols)}) có tần suất quá dày, hệ thống đã ngầm gộp trung bình theo từng ngày. Các chỉ số thường vẫn giữ nguyên thời điểm gốc.")
 
                         for col in selected_keys_2:
                             sub_df = chart_df[chart_df['Chỉ số'] == col.upper()]
@@ -271,8 +274,11 @@ if uploaded_file is not None:
                             
                             if sub_df.empty: continue
                             
-                            if rule: 
-                                plot_data = sub_df.set_index('TG').resample(rule)['Giá trị'].mean().dropna().reset_index()
+                            # CHỈ ÉP TRUNG BÌNH NẾU: Xem > 2 ngày VÀ chỉ số này thuộc nhóm tần suất cao
+                            current_rule = "1D" if (days_diff > 2 and ten_chi_so in high_freq_cols) else None
+                            
+                            if current_rule: 
+                                plot_data = sub_df.set_index('TG').resample(current_rule)['Giá trị'].mean().dropna().reset_index()
                             else: 
                                 plot_data = sub_df.groupby('TG')['Giá trị'].mean().reset_index()
                                 
@@ -311,15 +317,14 @@ if uploaded_file is not None:
                     mask = (df['_parsed_time'].dt.date >= start_d_3) & (df['_parsed_time'].dt.date <= end_d_3)
                     filtered_df = df[mask]
                     
-                    multi_chart_df = extract_sensor_data(filtered_df, selected_keys_3) 
+                    multi_chart_df, high_freq_cols = extract_sensor_data(filtered_df, selected_keys_3) 
                     
                     if not multi_chart_df.empty:
-                        # LOGIC ÉP BUỘC LÀM MƯỢT TRUNG BÌNH THEO NGÀY NẾU > 2 NGÀY
                         days_diff = (end_d_3 - start_d_3).days if (start_d_3 and end_d_3) else 0
-                        rule = "1D" if days_diff > 2 else None
 
-                        if rule == "1D":
-                            st.info("💡 Do khoảng thời gian bạn chọn > 2 ngày, hệ thống đã ngầm tự động gộp và tính trung bình các số liệu theo từng ngày để biểu đồ trực quan, dễ nhìn hơn.")
+                        averaged_cols = [c.upper() for c in selected_keys_3 if c.upper() in high_freq_cols]
+                        if days_diff > 2 and averaged_cols:
+                            st.info(f"💡 Chỉ số ({', '.join(averaged_cols)}) có tần suất quá dày, hệ thống đã ngầm gộp trung bình theo từng ngày. Các chỉ số thường vẫn giữ nguyên thời điểm gốc.")
 
                         clean_dfs = []
                         for col in selected_keys_3:
@@ -330,16 +335,21 @@ if uploaded_file is not None:
                                 min_val, max_val = KHOANG_TOI_UU[ten_chi_so]
                                 sub_df = sub_df[(sub_df['Giá trị'] >= min_val) & (sub_df['Giá trị'] <= max_val)]
                                 
-                            if not sub_df.empty: clean_dfs.append(sub_df)
+                            current_rule = "1D" if (days_diff > 2 and ten_chi_so in high_freq_cols) else None
                             
-                        multi_chart_df = pd.concat(clean_dfs) if clean_dfs else pd.DataFrame()
-                        
-                        if not multi_chart_df.empty:
-                            if rule: 
-                                plot_data = multi_chart_df.set_index('TG').groupby('Chỉ số')['Giá trị'].resample(rule).mean().dropna().reset_index()
-                            else: 
-                                plot_data = multi_chart_df.groupby(['TG', 'Chỉ số'])['Giá trị'].mean().reset_index()
+                            if not sub_df.empty:
+                                if current_rule: 
+                                    plot_data_sub = sub_df.set_index('TG').resample(current_rule)['Giá trị'].mean().dropna().reset_index()
+                                else: 
+                                    plot_data_sub = sub_df.groupby('TG')['Giá trị'].mean().reset_index()
                                 
+                                plot_data_sub['Chỉ số'] = ten_chi_so
+                                clean_dfs.append(plot_data_sub)
+                            
+                        # Gộp tất cả các DataFrame nhỏ lại để vẽ chung 1 biểu đồ
+                        plot_data = pd.concat(clean_dfs) if clean_dfs else pd.DataFrame()
+                        
+                        if not plot_data.empty:
                             plot_data = plot_data.sort_values(by='TG')
                             
                             fig, pts = generate_chart(plot_data, f"Biểu đồ Đối chiếu Trực tiếp", is_multi=True)

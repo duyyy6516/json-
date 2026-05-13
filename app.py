@@ -95,18 +95,16 @@ def load_and_process_data(file_bytes):
 # ==============================================================================
 
 def render_date_filter(min_date, max_date, key_prefix):
-    if not min_date: 
-        return None, None
-    
-    # Sử dụng dictionary hoặc list đơn giản để quản lý options
-    options = ["Tùy chọn", "7 ngày", "Tháng", "Quý"]
-    
-    mode = st.radio(
-        "⏳ Lọc theo:",
-        options,
-        horizontal=True,
-        key=f"m_{key_prefix}" # Rút ngắn key nếu có thể
-    )
+    # 👉 Hàm tạo ra cái Lịch trên màn hình để người dùng chọn khoảng thời gian muốn xem
+    if not min_date: return None, None
+    
+    # 👉 Tạo 4 nút bấm tròn (Radio) chọn kiểu xem
+    mode = st.radio(
+        "⏳ Kiểu lọc thời gian:", 
+        ["Tùy chọn", "Theo Tuần (7 ngày)", "Theo Tháng", "Theo Quý"], 
+        horizontal=True, 
+        key=f"mode_{key_prefix}"
+    ) 
     
     return mode # Hoặc xử lý logic trả về ngày tại đây
     

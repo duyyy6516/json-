@@ -318,3 +318,59 @@ if uploaded_file is not None:
 
     except Exception as e:
         st.error(f"Lỗi: {e}")
+"""
+==============================================================================
+DANH SÁCH CHI TIẾT CÁC CÔNG CỤ XỬ LÝ DỮ LIỆU TẬN GỐC (REGEX & DATA TOOLS)
+==============================================================================
+
+1. NHÓM CÔNG CỤ TRÍCH XUẤT (BÓC TÁCH)
+------------------------------------------------------------------------------
+* re.findall():
+    - Xử lý: Quét toàn bộ chuỗi từ đầu đến cuối để nhặt RA TẤT CẢ các cặp thỏa mãn.
+    - Trong code: Nhặt mọi cặp (Giờ-Phút-Giây)/(Giá trị) trong một chuỗi nén dài. 
+    - Ví dụ: "08-00/25; 09-00/26" -> Trả về danh sách [('08-00', '25'), ('09-00', '26')].
+
+* re.search():
+    - Xử lý: Dừng lại ngay khi tìm thấy kết quả ĐẦU TIÊN thỏa mãn.
+    - Trong code: Dùng để kiểm tra nhanh xem một ô dữ liệu có chứa số hay không trước khi xử lý. 
+    - Ví dụ: "N: 25.5 mg" -> Nó chỉ nhặt đúng số '25.5' rồi nghỉ, không quan tâm chữ 'mg' phía sau.
+
+* re.sub() (Tiềm năng):
+    - Xử lý: Tìm và Thay thế.
+    - Ứng dụng: Dùng để dọn dẹp các ký tự lạ như dấu chấm phẩy (;), dấu gạch đứng (|) thành dấu phẩy chuẩn trước khi tách mảng.
+
+2. NHÓM CÔNG CỤ BIẾN ĐỔI (TRANSFORM)
+------------------------------------------------------------------------------
+* .replace(r'^\s*$', np.nan, regex=True):
+    - Xử lý: Tìm các ô chỉ có dấu cách (trống rỗng) và biến chúng thành 'NaN' (Giá trị rỗng kỹ thuật).
+    - Mục tiêu: Để khi tính trung bình (Mean), máy sẽ bỏ qua các ô này, không làm sai lệch kết quả.
+
+* .astype(str).str.replace('-', ':'):
+    - Xử lý: Sửa lỗi gõ sai ký tự thời gian.
+    - Cụ thể: Biến "08-30-00" (dạng sai) thành "08:30:00" (dạng chuẩn) để Python hiểu được đó là Giờ:Phút.
+
+* .pivot():
+    - Xử lý: Xoay bảng dữ liệu.
+    - Cụ thể: Biến dữ liệu dạng dọc (Chỉ số nằm trên 1 cột) thành dạng ngang (Mỗi chỉ số N, P, K là 1 cột riêng) để ông dễ xem trong Excel.
+
+3. NHÓM CÔNG CỤ TÍNH TOÁN & GOM NHÓM (AGGREGATION)
+------------------------------------------------------------------------------
+* .resample('1D'):
+    - Xử lý: "Cắt lát" thời gian theo đơn vị 1 ngày.
+    - Cụ thể: Gom hàng trăm điểm dữ liệu lẻ tẻ của 24 tiếng đồng hồ vào một cái "giỏ" duy nhất đại diện cho ngày đó.
+
+* .mean():
+    - Xử lý: Tính trung bình cộng.
+    - Cụ thể: Lấy tổng giá trị trong "giỏ" ngày đó chia cho số lượng điểm để ra con số ổn định nhất, loại bỏ các biến động nhiễu tức thời.
+
+* .dropna():
+    - Xử lý: Vứt bỏ các hàng dữ liệu bị thiếu/lỗi sau khi tính toán.
+    - Mục tiêu: Đảm bảo biểu đồ là một đường liền mạch, không có các khoảng trắng vô nghĩa.
+
+4. LOGIC TỰ ĐỘNG CHỈNH SAI SỐ (SMART CORRECTION)
+------------------------------------------------------------------------------
+* Logic PH > 14: Tự động chia 100 (Ví dụ: 750 -> 7.5).
+* Logic Nhiệt độ > 100: Tự động chia 10 (Ví dụ: 255 -> 25.5).
+* Logic EC > 10000: Loại bỏ vì coi là ngắn mạch hoặc cảm biến lỗi cực nặng.
+==============================================================================
+"""
